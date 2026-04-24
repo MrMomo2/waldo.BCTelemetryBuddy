@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bc-telemetry
+  labels:
+    name: bc-telemetry
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bc-telemetry-secrets
+  namespace: bc-telemetry
+type: Opaque
+stringData:
+  api-key: "REPLACE_WITH_YOUR_API_KEY"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bc-telemetry-sse
+  namespace: bc-telemetry
+  labels:
+    app: bc-telemetry-sse
+    version: latest
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bc-telemetry-sse
+  template:
+    metadata:
+      labels:
+        app: bc-telemetry-sse
+        version: latest
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: sse-server
+        image: REPLACE_WITH_YOUR_ACR.azurecr.io/bc-telemetry-sse:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "3000"
+        - name: BCTB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bc-telemetry-secrets
+              key: api-key
+        - name: BCTB_WORKSPACE_PATH
+          value: "/app/workspace"
+        - name: NODE_ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: workspace
+          mountPath: /app/workspace
+      volumes:
+      - name: workspace
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bc-telemetry-sse
+  namespace: bc-telemetry
+  labels:
+    app: bc-telemetry-sse
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: bc-telemetry-sse
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bc-telemetry-sse
+  namespace: bc-telemetry
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  tls:
+  - hosts:
+    - bctelemetry.your-domain.com
+    secretName: bctelemetry-tls
+  rules:
+  - host: bctelemetry.your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: bc-telemetry-sse
+            port:
+              number: 3000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bc-telemetry-sse
+  namespace: bc-telemetry
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bc-telemetry-sse
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
