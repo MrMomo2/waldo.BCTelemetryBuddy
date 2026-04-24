@@ -5,23 +5,20 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --ignore-scripts
-
-COPY packages/shared/src ./packages/shared/src
-COPY packages/shared/tsconfig.json ./packages/shared/
-COPY packages/mcp/src ./packages/mcp/src
-COPY packages/mcp/scripts ./packages/mcp/scripts
-COPY packages/mcp/tsconfig.json ./packages/mcp/
+COPY package*.json tsconfig.json ./
+COPY packages ./packages
 COPY scripts ./scripts
 
-RUN node scripts/generate-telemetry-config-ci.js
-
-WORKDIR /app/packages/mcp
-RUN npm run build
+RUN npm ci --ignore-scripts && \
+    node scripts/generate-telemetry-config-ci.js
 
 WORKDIR /app/packages/shared
 RUN npm run build
+
+WORKDIR /app/packages/mcp
+RUN npm run build && \
+    node scripts/generate-version.js && \
+    npx esbuild src/sse-server.ts --bundle --outfile=dist/sse-server.js --platform=node --format=cjs --sourcemap --minify
 
 FROM node:22-alpine AS runtime
 
